@@ -1,0 +1,6 @@
+.DS_Store
+node_modules/
+# raw Overpass and HRDEM downloads; recreate with tools/fetch.mjs
+data/raw/
+# screenshots and report from tools/qa.mjs and tools/views.mjs
+qa/

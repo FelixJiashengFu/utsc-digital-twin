@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>UTSC Digital Twin — University of Toronto Scarborough in 3D</title>
+<meta name="description" content="A 3D digital twin of the University of Toronto Scarborough campus (October 2026): lidar terrain, every building, live sun and weather. English / 中文.">
+<meta name="theme-color" content="#0f1726">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230f1726'/%3E%3Cpath d='M12 44 L24 30 L34 38 L46 22 L52 28 L52 48 L12 48Z' fill='%236cb6ff'/%3E%3Crect x='18' y='18' width='10' height='14' fill='%23f2c14e'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css?v=262a6a6c1b">
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+<script type="module" src="app.js?v=a025d9a553"></script>
+</head>
+<body data-dock="">
+<canvas id="scene" aria-label="3D model of the University of Toronto Scarborough campus"></canvas>
+<div id="labels" aria-hidden="false"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"></span>
+    <div>
+      <h1 data-i18n="brand">UTSC Digital Twin</h1>
+      <p data-i18n="brandSub">University of Toronto Scarborough · 3D campus, October 2026</p>
+    </div>
+  </div>
+  <div class="top-right">
+    <span class="pill" id="weather" aria-live="polite"></span>
+    <span class="pill mono" id="clock"></span>
+    <button class="btn ghost" id="aboutBtn" type="button" data-i18n="about">About</button>
+    <button class="btn lang" id="langBtn" type="button" lang="zh-CN">中文</button>
+  </div>
+</header>
+
+<section class="panel dir" id="dir">
+  <div class="dir-top">
+    <button class="icon-btn dir-toggle" id="dirToggle" type="button" data-i18n-title="directory" title="Campus buildings">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+    </button>
+    <label class="search">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" stroke-width="2" fill="none"/><path d="M15.5 15.5 21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <input id="search" type="search" autocomplete="off" spellcheck="false" data-i18n-ph="search" placeholder="Search buildings or codes (IC, SW…)">
+    </label>
+  </div>
+  <button class="btn tour" id="tourBtn" type="button"><span class="spark" aria-hidden="true">✦</span><span data-i18n="tour">What’s new 2023–26</span></button>
+  <div class="dir-head"><span data-i18n="directory">Campus buildings</span><span class="count" id="dirCount"></span></div>
+  <ul class="dir-list" id="dirList"></ul>
+</section>
+
+<div class="tourbar" id="tourBar">
+  <button class="btn" id="tourPrev" type="button" data-i18n="tourPrev">Back</button>
+  <span id="tourStep"></span>
+  <button class="btn primary" id="tourNext" type="button" data-i18n="tourNext">Next</button>
+  <button class="btn ghost" id="tourEnd" type="button" data-i18n="tourEnd">End tour</button>
+</div>
+
+<aside class="panel card" id="card" hidden aria-live="polite"></aside>
+
+<div class="panel legend" id="legend" hidden></div>
+
+<nav class="mapctl" aria-label="Map controls">
+  <button class="icon-btn" id="northBtn" type="button" data-i18n-title="north" title="Face north">
+    <svg id="compass" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 2 16 12H8Z" fill="#ff5d5d"/><path d="M12 22 8 12h8Z" fill="currentColor" opacity=".55"/></svg>
+  </button>
+  <button class="icon-btn" id="zoomIn" type="button" data-i18n-title="zoomIn" title="Zoom in"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button>
+  <button class="icon-btn" id="zoomOut" type="button" data-i18n-title="zoomOut" title="Zoom out"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></button>
+  <button class="icon-btn txt" id="tiltBtn" type="button" data-i18n-title="tilt" title="Switch 2D / 3D">3D</button>
+  <button class="icon-btn" id="homeBtn" type="button" data-i18n-title="reset" title="Show the whole campus"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg></button>
+</nav>
+
+<footer class="dock panel" id="dock">
+  <div class="dock-tabs" role="tablist">
+    <button type="button" data-tab="view" data-i18n="view">View</button>
+    <button type="button" data-tab="sun" data-i18n="sun">Sunlight</button>
+    <button type="button" data-tab="time" data-i18n="timeline">Campus timeline</button>
+  </div>
+  <div class="dock-sec sec-view">
+    <div class="sec-title" data-i18n="view">View</div>
+    <div class="seg" id="modes" role="group">
+      <button type="button" data-mode="real" data-i18n="vReal">Realistic</button>
+      <button type="button" data-mode="func" data-i18n="vFunc">Function</button>
+      <button type="button" data-mode="height" data-i18n="vHeight">Height</button>
+      <button type="button" data-mode="age" data-i18n="vAge">Age</button>
+    </div>
+    <div class="layers" id="layers">
+      <label><input type="checkbox" data-layer="trees" checked><span data-i18n="lTrees">Trees</span></label>
+      <label><input type="checkbox" data-layer="labels" checked><span data-i18n="lLabels">Labels</span></label>
+      <label><input type="checkbox" data-layer="pois" checked><span data-i18n="lPois">Places</span></label>
+      <label><input type="checkbox" data-layer="context" checked><span data-i18n="lContext">Neighbourhood</span></label>
+      <label><input type="checkbox" data-layer="shadows" checked><span data-i18n="lShadows">Shadows</span></label>
+    </div>
+  </div>
+  <div class="dock-sec sec-sun">
+    <div class="sec-title"><span data-i18n="sun">Sunlight</span><span class="mono val" id="timeVal"></span><span class="sub" id="sunInfo"></span></div>
+    <input type="range" id="timeRange" min="0" max="1439" step="1" aria-label="Time of day">
+    <div class="row">
+      <input type="date" id="dateInput" aria-label="Date">
+      <button class="btn small" id="liveBtn" type="button" data-i18n="now">Now</button>
+    </div>
+  </div>
+  <div class="dock-sec sec-time">
+    <div class="sec-title"><span data-i18n="timeline">Campus timeline</span><span class="mono val" id="yearVal">2026</span></div>
+    <input type="range" id="yearRange" min="1962" max="2026" step="1" value="2026" aria-label="Year">
+    <div class="row">
+      <button class="btn small" id="playBtn" type="button" data-i18n="play">Play</button>
+      <button class="btn small" id="todayBtn" type="button" data-i18n="today">Today</button>
+      <span class="sub year-list" id="yearList"></span>
+    </div>
+  </div>
+</footer>
+
+<p class="hint" id="hint"></p>
+<div class="tip" id="tip" hidden></div>
+
+<div class="loading" id="loading">
+  <div class="loader">
+    <div class="ring" aria-hidden="true"></div>
+    <p class="load-title" data-i18n="brand">UTSC Digital Twin</p>
+    <p id="loadMsg">Loading the campus…</p>
+  </div>
+</div>
+
+<dialog class="panel about" id="about">
+  <div class="about-head"><h2 data-i18n="aboutTitle">About this digital twin</h2><button class="icon-btn" id="aboutClose" type="button" data-i18n-title="close" title="Close">×</button></div>
+  <div id="aboutText"></div>
+  <h3 data-i18n="sourcesTitle">Sources and licences</h3>
+  <ul id="sources"></ul>
+  <p class="credits" id="credits"></p>
+</dialog>
+</body>
+</html>

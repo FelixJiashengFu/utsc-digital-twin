@@ -1,0 +1,18 @@
+{
+  "name": "utsc-digital-twin",
+  "private": true,
+  "type": "module",
+  "description": "Build tools for the UTSC digital twin (run with Deno or Node)",
+  "scripts": {
+    "fetch": "node tools/fetch.mjs",
+    "process": "node tools/process.mjs",
+    "build": "node tools/build.mjs",
+    "qa": "node tools/qa.mjs"
+  },
+  "dependencies": {
+    "geotiff": "2.1.3"
+  },
+  "devDependencies": {
+    "playwright-core": "1.49.1"
+  }
+}
