@@ -7,9 +7,9 @@
 <meta name="description" content="A 3D digital twin of the University of Toronto Scarborough campus (October 2026): lidar terrain, every building, live sun and weather. English / 中文.">
 <meta name="theme-color" content="#0f1726">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230f1726'/%3E%3Cpath d='M12 44 L24 30 L34 38 L46 22 L52 28 L52 48 L12 48Z' fill='%236cb6ff'/%3E%3Crect x='18' y='18' width='10' height='14' fill='%23f2c14e'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="styles.css?v=262a6a6c1b">
+<link rel="stylesheet" href="styles.css?v=bae4f53706">
 <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
-<script type="module" src="app.js?v=2430f10310"></script>
+<script type="module" src="app.js?v=15a16c9466"></script>
 </head>
 <body data-dock="">
 <canvas id="scene" aria-label="3D model of the University of Toronto Scarborough campus"></canvas>
@@ -45,6 +45,22 @@
   <div class="dir-head"><span data-i18n="directory">Campus buildings</span><span class="count" id="dirCount"></span></div>
   <ul class="dir-list" id="dirList"></ul>
 </section>
+
+<div class="walkbar panel" id="walkbar">
+  <span class="wb-ico" aria-hidden="true">🚶</span>
+  <div class="wb-text"><b id="wbFrom"></b><span id="wbHint" aria-live="polite"></span></div>
+  <span class="wb-legend" id="wbLegend" hidden><i id="wbLegendBar"></i><span class="wb-ends"><span>0</span><span id="wbLegendLabel"></span><span>25+</span></span></span>
+  <button class="btn small" id="wbPick" type="button" aria-pressed="false">Set start</button>
+  <button class="icon-btn wb-loc" id="wbLoc" type="button" title="Start from my location">
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="currentColor"/><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </button>
+  <button class="btn small wb-iso" id="wbIso" type="button" aria-pressed="false"><span class="long" id="wbIsoLong">Walk-time map</span><span class="short" aria-hidden="true">⏱</span></button>
+</div>
+
+<div id="pins">
+  <button class="pin pin-start" id="pinStart" type="button" title="Start — drag to move"><span class="ps-dot" aria-hidden="true">🚶</span></button>
+  <div class="pin pin-end" id="pinEnd" hidden><span class="pe-bubble"><span id="pinEndTime"></span></span></div>
+</div>
 
 <div class="tourbar" id="tourBar">
   <button class="btn" id="tourPrev" type="button" data-i18n="tourPrev">Back</button>

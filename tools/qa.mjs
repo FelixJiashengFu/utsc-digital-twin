@@ -126,14 +126,15 @@ const setTime = (page, minutes) => page.evaluate((m) => {
   check('directory click opens the card and flies in', card.title === 'Sam Ibrahim Building' && card.hash === '#IA' && card.dist < 800, card);
   await page.screenshot({ path: join(OUT, 'desktop-card.png') });
 
-  // --- click a building in the scene
-  const tapped = await page.evaluate(() => {
-    const { data, camera } = window.twin;
-    const inf = data.info.find((i) => i.code === 'IC');
-    const V = camera.position.constructor;
-    const p = new V(inf.lp[0], inf.top - 100 - 3, -inf.lp[1]).project(camera);
-    return { x: ((p.x + 1) / 2) * innerWidth, y: ((1 - p.y) / 2) * innerHeight };
-  });
+  // with a card open, the walking bar must still be clickable
+  const barFree = await page.evaluate(() => ['#wbPick', '#wbLoc', '#wbIso'].every((sel) => {
+    const b = document.querySelector(sel).getBoundingClientRect();
+    return document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)?.closest(sel);
+  }));
+  check('walking bar buttons stay clickable with a card open', barFree);
+
+  // --- click a building in the scene (card closed, so the card cannot be in the way)
+  await page.evaluate(() => window.twin.select(null));
   await page.evaluate(() => window.twin.controls.flyTo({ target: window.twin.controls.target.clone().set(-260, 35, -470), dist: 650, pitch: 0.9 }, 0.4));
   await settle(page, 1200);
   const icPt = await page.evaluate(() => {
@@ -143,13 +144,80 @@ const setTime = (page, minutes) => page.evaluate((m) => {
     const p = new V(inf.lp[0], inf.top - 100 - 4, -inf.lp[1]).project(camera);
     return { x: ((p.x + 1) / 2) * innerWidth, y: ((1 - p.y) / 2) * innerHeight };
   });
-  void tapped;
   await page.mouse.click(icPt.x, icPt.y + 8);
   await settle(page, 500);
   const picked = await page.evaluate(() => document.querySelector('#card h2')?.textContent);
   check('clicking a building in 3D selects it', picked === 'Instructional Centre', { picked, at: icPt });
 
-  // --- language switch
+  // --- walking times
+  const walkInfo = await page.evaluate(() => {
+    const { data, net, walkTo, setStart, state, B } = window.twin;
+    const out = {};
+    const recOf = (code) => B.recs.find((r) => r.info === data.info.findIndex((i) => i.code === code));
+    const r = state.walk.route;
+    out.cardWalk = document.querySelector('#card .walk-block .wk-main')?.textContent.trim();
+    out.pinEnd = !document.querySelector('#pinEnd').hidden && document.querySelector('#pinEndTime').textContent;
+    // the drawn route is one continuous line
+    let gap = 0;
+    for (let i = 1; i < r.pts.length; i++) gap = Math.max(gap, Math.hypot(r.pts[i][0] - r.pts[i - 1][0], r.pts[i][1] - r.pts[i - 1][1]));
+    out.maxGap = gap;
+    out.routeLen = r.pts.reduce((s, p, i) => (i ? s + Math.hypot(p[0] - r.pts[i - 1][0], p[1] - r.pts[i - 1][1]) : 0), 0);
+    out.routeDist = r.dist;
+    out.netDist = r.dist - state.walk.start.leg - r.endLeg;
+    // bus loop → IC, and into the valley and back out
+    const ic = walkTo({ outer: recOf('IC').outer });
+    out.busToIC = ic.time / 60;
+    const ml = recOf('ML');
+    out.busToML = walkTo({ outer: ml.outer }).time / 60;
+    const start = { ...state.walk.start };
+    setStart({ outer: ml.outer }, { en: 'Miller Lash House' });
+    out.mlToBus = walkTo({ x: data.walkStart.x, y: data.walkStart.y }).time / 60;
+    setStart({ x: start.x, y: start.y }, start.name);
+    out.flatCheck = Math.round(net.edges.length);
+    return out;
+  });
+  report.walk = walkInfo;
+  check('a clicked building shows the walk in its card and on the map', /min/.test(walkInfo.cardWalk || '') && /min/.test(walkInfo.pinEnd || ''), { card: walkInfo.cardWalk, pin: walkInfo.pinEnd });
+  check('the drawn route matches the computed walking distance', Math.abs(walkInfo.routeLen - walkInfo.netDist) < 1, { drawnM: Math.round(walkInfo.routeLen), networkM: Math.round(walkInfo.netDist) });
+  check('bus loop → Instructional Centre takes a few minutes', walkInfo.busToIC > 2 && walkInfo.busToIC < 12, +walkInfo.busToIC.toFixed(1));
+  check('climbing out of the valley takes longer than walking down', walkInfo.mlToBus > walkInfo.busToML, { down: +walkInfo.busToML.toFixed(1), up: +walkInfo.mlToBus.toFixed(1) });
+  // click open ground: a route card and a time bubble
+  await page.evaluate(() => window.twin.controls.flyTo({ target: window.twin.controls.target.clone().set(-60, 30, 120), dist: 700, pitch: 0.95, yaw: -0.4 }, 0.3));
+  await settle(page, 900);
+  let groundSpot = null;
+  for (const [fx, fy] of [[0.55, 0.45], [0.62, 0.38], [0.48, 0.58], [0.66, 0.6], [0.4, 0.4]]) {
+    const hit = await page.evaluate(([fx, fy]) => {
+      const h = window.twin.castRay(window.twin.camera.position.clone(), new (window.twin.camera.position.constructor)(fx * 2 - 1, -(fy * 2 - 1), 0.5).unproject(window.twin.camera).sub(window.twin.camera.position).normalize());
+      return h && !h.rec;
+    }, [fx, fy]);
+    if (hit) { groundSpot = [1440 * fx, 900 * fy]; break; }
+  }
+  await page.mouse.click(...groundSpot);
+  await settle(page, 500);
+  const pointCard = await page.evaluate(() => ({ chip: document.querySelector('#card .chip.walk')?.textContent, title: document.querySelector('#card h2')?.textContent, walk: document.querySelector('#card .wk-main')?.textContent.trim() }));
+  check('clicking open ground shows the walking time there', pointCard.chip === 'Walking route' && /min/.test(pointCard.walk || ''), pointCard);
+  await page.screenshot({ path: join(OUT, 'desktop-walk.png') });
+  // hover shows the time without clicking
+  await page.mouse.move(groundSpot[0] + 60, groundSpot[1] - 40);
+  await settle(page, 400);
+  const tipText = await page.evaluate(() => (document.querySelector('#tip').hidden ? '' : document.querySelector('#tip').textContent));
+  check('hovering shows the walking time', /🚶/.test(tipText), tipText);
+  // choose a new start on the map, then the walk-time map
+  await page.click('#wbPick');
+  await page.mouse.click(groundSpot[0] - 120, groundSpot[1] + 60);
+  await settle(page, 400);
+  const from = await page.evaluate(() => document.querySelector('#wbFrom').textContent);
+  check('the start can be moved by clicking the map', from === 'Walking from your pin', from);
+  await page.click('#wbIso');
+  await settle(page, 600);
+  await page.screenshot({ path: join(OUT, 'desktop-isochrones.png') });
+  const isoOn = await page.evaluate(() => window.twin.state.walk.iso);
+  check('the walk-time map turns on', isoOn);
+  await page.click('#wbIso');
+  await page.evaluate(() => { const { setStart, data } = window.twin; setStart({ x: data.walkStart.x, y: data.walkStart.y }, { en: data.walkStart.en, zh: data.walkStart.zh }); });
+
+  // --- language switch (with the Instructional Centre card open again)
+  await page.evaluate(() => { const { data, select } = window.twin; select({ kind: 'campus', info: data.info.findIndex((i) => i.code === 'IC') }); });
   await page.click('#langBtn');
   await settle(page, 400);
   const zh = await page.evaluate(() => ({ html: document.documentElement.lang, brand: document.querySelector('.brand h1').textContent, card: document.querySelector('#card h2')?.textContent, btn: document.querySelector('#langBtn').textContent, mode: document.querySelector('[data-mode="func"]').textContent }));
@@ -201,6 +269,11 @@ const setTime = (page, minutes) => page.evaluate((m) => {
   await settle(page, 3000);
   await page.screenshot({ path: join(OUT, 'phone-card.png') });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth || document.body.scrollWidth > innerWidth);
+  const bar = await page.evaluate(() => {
+    const b = document.querySelector('#walkbar').getBoundingClientRect(), f = document.querySelector('#wbFrom').getBoundingClientRect();
+    return { right: Math.round(b.right), vw: innerWidth, fromW: Math.round(f.width), walk: document.querySelector('#card .wk-main')?.textContent.trim() };
+  });
+  check('phone: walking bar fits on screen with a card open, and the card shows the walk', bar.right <= bar.vw && bar.fromW > 60 && /min/.test(bar.walk || ''), bar);
   check('phone layout has no horizontal overflow', !overflow);
   await page.click('[data-tab="sun"]');
   await settle(page, 300);

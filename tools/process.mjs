@@ -760,6 +760,100 @@ for (const nd of nodes) {
   pois.push({ t: type, x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, n: t.name || '', h: Math.round(H(x, y) * 10) / 10 });
 }
 
+// ---------------------------------------------------------------- walking network
+// Every footway, path, stair, indoor corridor and street a pedestrian may use, split into edges
+// between junctions. Elevations come from the terrain, except along bridges, tunnels and indoor
+// corridors, where they are interpolated between the ends of the way (so a footbridge does not
+// dip into the ravine under it). Only the largest connected piece is kept, so every click can be reached.
+const WALKABLE = new Set(['footway', 'path', 'pedestrian', 'steps', 'cycleway', 'living_street', 'residential', 'service',
+  'unclassified', 'tertiary', 'tertiary_link', 'secondary', 'secondary_link', 'primary', 'primary_link', 'track', 'corridor', 'bridleway']);
+const ROADLIKE = new Set(['residential', 'service', 'unclassified', 'tertiary', 'tertiary_link', 'secondary', 'secondary_link',
+  'primary', 'primary_link', 'track']);
+const W_STEPS = 1, W_INDOOR = 2, W_BRIDGE = 4, W_TUNNEL = 8, W_ROAD = 16;
+const walkWays = [];
+const nodeXY = new Map(), nodeZ = new Map(), useCount = new Map();
+for (const e of land) {
+  const t = e.tags || {};
+  if (!WALKABLE.has(t.highway) || !e.nodes || !e.geometry || e.nodes.length !== e.geometry.length || e.nodes.length < 2) continue;
+  if (t.area === 'yes' || t.foot === 'no' || (t.access === 'no' && !['yes', 'designated', 'permissive'].includes(t.foot))) continue;
+  if (e.geometry.some((p) => !p)) continue;
+  let flags = 0;
+  if (t.highway === 'steps') flags |= W_STEPS;
+  if (t.highway === 'corridor' || t.indoor === 'yes' || t.tunnel === 'building_passage') flags |= W_INDOOR;
+  if (t.bridge && t.bridge !== 'no') flags |= W_BRIDGE;
+  if (t.tunnel === 'yes') flags |= W_TUNNEL;
+  if (ROADLIKE.has(t.highway) && t.foot !== 'designated') flags |= W_ROAD;
+  const pts = e.geometry.map(proj);
+  e.nodes.forEach((id, i) => {
+    if (!nodeXY.has(id)) { nodeXY.set(id, pts[i]); nodeZ.set(id, H(...pts[i])); }
+    useCount.set(id, (useCount.get(id) || 0) + (i === 0 || i === e.nodes.length - 1 ? 2 : 1));
+  });
+  walkWays.push({ ids: e.nodes, pts, flags });
+}
+for (const w of walkWays) {
+  if (!(w.flags & (W_BRIDGE | W_TUNNEL | W_INDOOR)) || w.ids.length < 3) continue;
+  const cum = [0];
+  for (let i = 1; i < w.pts.length; i++) cum.push(cum[i - 1] + Math.hypot(w.pts[i][0] - w.pts[i - 1][0], w.pts[i][1] - w.pts[i - 1][1]));
+  const z0 = nodeZ.get(w.ids[0]), z1 = nodeZ.get(w.ids[w.ids.length - 1]), L = cum[cum.length - 1] || 1;
+  for (let i = 1; i < w.ids.length - 1; i++) nodeZ.set(w.ids[i], z0 + ((z1 - z0) * cum[i]) / L);
+}
+// split ways into edges at junctions (nodes used more than once) and where they leave the model
+const junction = new Map();
+const jxyz = [];
+const jOf = (id) => {
+  if (!junction.has(id)) { junction.set(id, jxyz.length); jxyz.push([...nodeXY.get(id), nodeZ.get(id)]); }
+  return junction.get(id);
+};
+let walkEdges = [];
+for (const w of walkWays) {
+  let cur = null;
+  for (let i = 0; i < w.ids.length; i++) {
+    const id = w.ids[i];
+    if (!inBox(nodeXY.get(id), 1)) { cur = null; continue; }
+    const p = [...nodeXY.get(id), nodeZ.get(id)];
+    if (!cur) { cur = { a: jOf(id), flags: w.flags, pts: [p] }; continue; }
+    cur.pts.push(p);
+    if (useCount.get(id) >= 2 || i === w.ids.length - 1) {
+      cur.b = jOf(id);
+      if (cur.pts.length >= 2) walkEdges.push(cur);
+      cur = { a: cur.b, flags: w.flags, pts: [p] };
+    }
+  }
+}
+// keep the largest connected piece
+const parent = jxyz.map((_, i) => i);
+const findRoot = (i) => { while (parent[i] !== i) i = parent[i] = parent[parent[i]]; return i; };
+for (const e of walkEdges) parent[findRoot(e.a)] = findRoot(e.b);
+const compSize = new Map();
+for (let i = 0; i < jxyz.length; i++) if (junction.size) compSize.set(findRoot(i), (compSize.get(findRoot(i)) || 0) + 1);
+const mainRoot = [...compSize.entries()].sort((a, b) => b[1] - a[1])[0][0];
+const keepJ = jxyz.map((_, i) => findRoot(i) === mainRoot);
+const newIndex = [];
+let nj = 0;
+keepJ.forEach((k, i) => { newIndex[i] = k ? nj++ : -1; });
+walkEdges = walkEdges.filter((e) => keepJ[e.a] && keepJ[e.b]);
+const enc3 = (pts, start = [0, 0, 0]) => {
+  const outArr = [];
+  let [px, py, pz] = start;
+  for (const [x, y, z] of pts) {
+    const ix = Math.round(x * 10), iy = Math.round(y * 10), iz = Math.round(z * 10);
+    outArr.push(ix - px, iy - py, iz - pz);
+    px = ix; py = iy; pz = iz;
+  }
+  return outArr;
+};
+const keptNodes = jxyz.filter((_, i) => keepJ[i]);
+const walk = {
+  nodes: enc3(keptNodes),
+  edges: walkEdges.map((e) => {
+    const a = jxyz[e.a];
+    return [newIndex[e.a], newIndex[e.b], e.flags, ...enc3(e.pts.slice(1, -1), [Math.round(a[0] * 10), Math.round(a[1] * 10), Math.round(a[2] * 10)])];
+  }),
+};
+const busLoop = nodes.find((nd) => nd.tags && nd.tags.amenity === 'bus_station');
+const walkStart = busLoop ? (([x, y]) => ({ x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, en: 'UTSC bus loop', zh: 'UTSC 公交总站' }))(proj(busLoop)) : { x: 0, y: 0, en: 'Campus centre', zh: '校园中心' };
+console.log(`walking network: ${keptNodes.length} junctions, ${walkEdges.length} edges (dropped ${jxyz.length - keptNodes.length} junctions in small islands)`);
+
 // ---------------------------------------------------------------- write
 const osmBase = load('buildings').osm3s?.timestamp_osm_base || '';
 const data = {
@@ -782,6 +876,8 @@ const data = {
   labels,
   pois,
   boundary,
+  walk,
+  walkStart,
   sources: SOURCES,
 };
 const json = JSON.stringify(data);

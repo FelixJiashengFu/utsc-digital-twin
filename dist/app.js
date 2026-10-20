@@ -4,7 +4,8 @@ import { DATUM, Terrain, buildTerrainMeshes, paintGround, buildRoads, buildWater
 import { TwinControls } from './controls.js?v=630d125d76';
 import { SkySystem, sunPosition, sunTimes } from './sky.js?v=5c293d7e91';
 import { LabelLayer } from './labels.js?v=be06b76a19';
-import { STR, fmt } from './i18n.js?v=ae50786392';
+import { STR, fmt } from './i18n.js?v=5b0a415bcd';
+import { WalkNet, walkSeconds, ribbon, buildIsoMesh, ISO_RAMP, STEPS, INDOOR } from './walk.js?v=b083093b7d';
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -25,10 +26,12 @@ const state = {
   year: 2026,
   timeline: false,
   playing: false,
-  sel: null,        // {kind: 'campus', info} | {kind: 'ctx', rec}
+  sel: null,        // {kind: 'campus', info} | {kind: 'ctx', rec} | {kind: 'point', x, y}
   hoverKey: -1,
   weather: null,
   tour: null,
+  // walking: start {x, y, name, leg}, shortest-time tree from it, destination and its route
+  walk: { start: null, tree: null, dest: null, route: null, pick: false, iso: false },
 };
 const touch = matchMedia('(pointer: coarse)').matches;
 const small = Math.min(innerWidth, innerHeight) < 720;
@@ -72,7 +75,7 @@ async function fetchOk(url) {
   return r;
 }
 async function loadTerrain(spec) {
-  let bytes = new Uint8Array(await (await fetchOk('data/' + spec.file + '?v=012cf8f510')).arrayBuffer());
+  let bytes = new Uint8Array(await (await fetchOk('data/' + spec.file + '?v=bbe84b01a0')).arrayBuffer());
   if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
     const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
     bytes = new Uint8Array(await new Response(stream).arrayBuffer());
@@ -93,6 +96,7 @@ const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeou
 
 // ---------------------------------------------------------------- main
 let data, T, B, trees, roads, water, lamps, outline, controls, sky, labels, renderer, scene, camera, terrainMat, groundTex;
+let net, iso, routeGroup = null, routeWidth = 0;
 let needsRender = true;
 const canvas = $('#scene');
 const tiltBtn = $('#tiltBtn');
@@ -108,7 +112,7 @@ async function main() {
     return;
   }
   loadMsg('loading');
-  data = await (await fetchOk('data/campus.json?v=012cf8f510')).json();
+  data = await (await fetchOk('data/campus.json?v=bbe84b01a0')).json();
   loadMsg('loadTerrain');
   const heights = await loadTerrain(data.terrain);
   T = new Terrain(data.terrain, heights, data.bounds);
@@ -150,11 +154,15 @@ async function main() {
   scene.add(trees.group);
   lamps = buildStreetLights(data, T);
   scene.add(lamps.group);
+  net = new WalkNet(data, T);
+  iso = buildIsoMesh(net, T);
+  scene.add(iso.mesh);
 
   sky = new SkySystem(scene, renderer, Q);
   setupControls();
   setupLabels();
   setupUI();
+  setupWalk();
   updateSun();
   fetchWeather();
   setInterval(tick, 20000);
@@ -168,7 +176,7 @@ async function main() {
   controls.flyTo(homeView(), 2.4);
   requestAnimationFrame(frame);
   // handle for debugging from the console and for the automated browser checks in tools/qa.mjs
-  window.twin = { state, controls, data, B, T, camera, renderer, select, setYear, applyMode, castRay, frames: 0 };
+  window.twin = { state, controls, data, B, T, camera, renderer, select, setYear, applyMode, castRay, net, setStart, walkTo, frames: 0 };
   loadEl.classList.add('done');
   setTimeout(() => loadEl.remove(), 900);
   if (location.hash.length > 1) selectByCode(decodeURIComponent(location.hash.slice(1)), true);
@@ -251,7 +259,15 @@ function setupControls() {
   controls.on('start', () => { stopTour(false); hideTip(); });
   controls.on('tap', (cx, cy) => {
     const hit = pickAt(cx, cy);
+    if (state.walk.pick) {
+      state.walk.pick = false;
+      if (hit) setStart(hit.rec ? { outer: mainRec(hit.rec).outer } : { x: hit.point.x, y: -hit.point.z }, hit.rec ? recName(hit.rec) : { key: 'walkPinned' });
+      renderWalkbar();
+      return;
+    }
+    // any spot on the map: buildings open their card, open ground gets a route card; both show the walk there
     if (hit && hit.rec) select(hit.rec.info >= 0 ? { kind: 'campus', info: hit.rec.info } : { kind: 'ctx', rec: hit.rec });
+    else if (hit) select({ kind: 'point', x: hit.point.x, y: -hit.point.z });
     else select(null);
   });
   let hoverXY = null;
@@ -271,7 +287,7 @@ function setupControls() {
       const hit = pickAt(...hoverXY);
       const rec = hit && hit.rec;
       setHover(rec ? rec.key : -1);
-      if (rec) showTip(rec, ...hoverXY); else hideTip();
+      if (hit) showTip(rec, ...hoverXY, hoverWalk(hit)); else hideTip();
     });
   }
 }
@@ -346,10 +362,14 @@ function viewFor(inf) {
 }
 function select(sel, fly = false) {
   state.sel = sel;
-  const key = !sel ? -1 : sel.kind === 'campus' ? 100000 + sel.info : sel.rec.key;
+  const key = !sel || sel.kind === 'point' ? -1 : sel.kind === 'campus' ? 100000 + sel.info : sel.rec.key;
   B.uniforms.uSel.value = key;
   if (outline) { scene.remove(outline); outline.children[0].geometry.dispose(); outline = null; }
-  if (sel) { outline = buildOutline(sel.kind === 'campus' ? recsOf(sel.info) : [sel.rec], T); scene.add(outline); }
+  if (sel && sel.kind !== 'point') { outline = buildOutline(sel.kind === 'campus' ? recsOf(sel.info) : [sel.rec], T); scene.add(outline); }
+  // the walk from the current start to whatever was picked
+  if (!sel) setDest(null);
+  else if (sel.kind === 'point') setDest({ x: sel.x, y: sel.y });
+  else setDest({ outer: mainRec(sel.kind === 'campus' ? recsOf(sel.info)[0] : sel.rec).outer });
   renderCard();
   if (sel && sel.kind === 'campus') {
     const inf = data.info[sel.info];
@@ -403,11 +423,12 @@ function renderCard() {
       </div>
       <h2>${esc(infoName(inf))}</h2>
       ${other && other !== infoName(inf) ? `<p class="alt" lang="${state.lang === 'zh' ? 'en' : 'zh-CN'}">${esc(other)}</p>` : ''}
+      ${walkBlock()}
       ${inf.status ? `<p class="status">${esc(inf.status[state.lang])}</p>` : ''}
       <dl class="facts">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>
       ${inf.desc ? `<p class="desc">${esc(inf.desc[state.lang])}</p>` : ''}
       <div class="card-foot"><button class="btn primary card-fly" type="button">${esc(s.fly)}</button><span class="links">${links.join('')}</span></div>`;
-  } else {
+  } else if (sel.kind === 'ctx') {
     const rec = sel.rec, b = data.buildings[rec.bi];
     const type = data.ctx[b.k] ? data.ctx[b.k].en : 'other';
     const facts = [];
@@ -418,34 +439,293 @@ function renderCard() {
         <button class="icon-btn card-close" type="button" aria-label="${esc(s.close)}" title="${esc(s.close)}">×</button></div>
       <h2>${esc(b.n || s.ctx[type] || s.ctx.other)}</h2>
       ${b.n ? `<p class="alt">${esc(s.ctx[type] || '')}</p>` : ''}
+      ${walkBlock()}
       <dl class="facts">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
+  } else {
+    const ground = T.height(sel.x, sel.y);
+    html = `
+      <div class="card-head"><div class="chips"><span class="chip walk">${esc(s.walkRoute)}</span></div>
+        <button class="icon-btn card-close" type="button" aria-label="${esc(s.close)}" title="${esc(s.close)}">×</button></div>
+      <h2>${esc(placeName(sel.x, sel.y))}</h2>
+      <p class="alt">${esc(fmt(s.asl, { m: ground.toFixed(0) }))}</p>
+      ${walkBlock()}`;
   }
   card.innerHTML = html;
   $('.card-close', card).addEventListener('click', () => select(null));
+  const here = $('.wk-here', card);
+  if (here) here.addEventListener('click', walkFromHere);
   const fly = $('.card-fly', card);
   if (fly) fly.addEventListener('click', () => controls.flyTo(viewFor(data.info[state.sel.info])));
 }
 
 // ---------------------------------------------------------------- tooltip
 const tip = () => $('#tip');
-function showTip(rec, x, y) {
+function showTip(rec, x, y, w) {
   const s = S();
-  let html;
-  if (rec.info >= 0) {
+  let html = '';
+  if (rec && rec.info >= 0) {
     const inf = data.info[rec.info];
     const cat = data.categories[inf.cat];
     html = `${inf.code ? `<b style="--c:${cat ? cat.color : '#888'}">${esc(inf.code)}</b>` : ''}${esc(infoName(inf) || s.ctx.other)}`;
-  } else {
+  } else if (rec) {
     const b = data.buildings[rec.bi];
     const type = data.ctx[b.k] ? data.ctx[b.k].en : 'other';
     html = esc(b.n || s.ctx[type] || s.ctx.other);
   }
+  if (w) html += `<span class="tip-walk">🚶 ${esc(fmtDur(w.time))} · ${esc(fmtDist(w.dist))}</span>`;
+  if (!html) { hideTip(); return; }
   const el = tip();
   el.innerHTML = html;
   el.hidden = false;
   el.style.transform = `translate(${x + 14}px, ${y + 16}px)`;
 }
 function hideTip() { const el = tip(); if (el) el.hidden = true; }
+
+// ---------------------------------------------------------------- walking times
+// One shortest-time tree from the start answers "how long to walk there?" for any spot instantly;
+// the route itself is drawn only for the spot that was clicked.
+const OFF_PATH = 1.2; // the stretch between a clicked spot and the nearest path is slower than a path
+const walk = state.walk;
+let walkVersion = 0;
+const hoverCache = new Map();
+
+function mainRec(rec) { return rec.info >= 0 ? recsOf(rec.info)[0] : rec; }
+function recName(rec) {
+  if (rec.info >= 0) { const inf = data.info[rec.info]; return { en: inf.en, zh: inf.zh || inf.en }; }
+  const b = data.buildings[rec.bi], type = data.ctx[b.k] ? data.ctx[b.k].en : 'other';
+  return { en: b.n || STR.en.ctx[type], zh: b.n || STR.zh.ctx[type] };
+}
+const nameText = (n) => (!n ? '' : n.key ? S()[n.key] : (state.lang === 'zh' && n.zh) || n.en);
+function fmtDur(sec) {
+  const s = S(), m = Math.round(sec / 60);
+  if (sec < 40) return s.durLess;
+  if (m < 60) return fmt(s.durMin, { m: Math.max(1, m) });
+  return fmt(s.durHour, { h: Math.floor(m / 60), m: m % 60 });
+}
+const fmtDist = (d) => (d < 1000 ? `${Math.max(10, Math.round(d / 10) * 10)} m` : `${(d / 1000).toFixed(1)} km`);
+// a friendly name for a spot on open ground: the nearest named place within 150 m
+function placeName(x, y) {
+  let best = null, bd = 150;
+  for (const L of data.labels) {
+    if (L.t === 'road') continue;
+    const d = Math.hypot(L.x - x, L.y - y);
+    if (d < bd) { bd = d; best = L; }
+  }
+  return best ? fmt(S().walkNear, { p: (state.lang === 'zh' && best.zh) || best.en }) : S().walkPoint;
+}
+// snap a target ({x, y} or a building {outer}) onto the path network
+function snapTarget(tg) {
+  if (tg.outer) {
+    const p = net.snapFootprint(tg.outer);
+    if (p) return { p, x: p.fx, y: p.fy };
+  }
+  const p = net.snap(tg.x, tg.y);
+  return p && { p, x: tg.x ?? p.x, y: tg.y ?? p.y };
+}
+function setStart(tg, name) {
+  const s = snapTarget(tg);
+  if (!s) return;
+  const leg = Math.hypot(s.x - s.p.x, s.y - s.p.y);
+  walk.start = { x: s.x, y: s.y, name, leg };
+  walk.tree = net.tree(s.p, walkSeconds(leg, s.p.z - T.height(s.x, s.y)) * OFF_PATH);
+  walkVersion++;
+  hoverCache.clear();
+  if (walk.iso) iso.color(walk.tree);
+  if (walk.dest) computeRoute();
+  renderWalkbar();
+  renderCard();
+  placePins();
+  needsRender = true;
+}
+// time and distance from the start to a target
+function walkTo(tg) {
+  if (!walk.tree) return null;
+  const s = snapTarget(tg);
+  if (!s) return null;
+  const q = net.query(walk.tree, s.p);
+  const d = Math.hypot(s.x - s.p.x, s.y - s.p.y);
+  return { ...s, q, end: d, time: q.time + walkSeconds(d, T.height(s.x, s.y) - s.p.z) * OFF_PATH, dist: walk.start.leg + q.dist + d };
+}
+function hoverWalk(hit) {
+  if (hit.rec) {
+    const key = `${walkVersion}:${mainRec(hit.rec).bi}`;
+    if (!hoverCache.has(key)) hoverCache.set(key, walkTo({ outer: mainRec(hit.rec).outer }));
+    return hoverCache.get(key);
+  }
+  return walkTo({ x: hit.point.x, y: -hit.point.z });
+}
+function setDest(tg) {
+  walk.dest = tg;
+  if (tg) computeRoute(); else { walk.route = null; drawRoute(); }
+}
+function computeRoute() {
+  const w = walkTo(walk.dest);
+  if (!w) { walk.route = null; drawRoute(); return; }
+  const path = net.path(walk.tree, w.p, w.q);
+  walk.route = { ...path, time: w.time, dist: w.dist, end: [w.x, w.y], endLeg: w.end };
+  drawRoute();
+}
+const routeWidthFor = (d) => clamp(d * 0.0065, 2.4, 16);
+function drawRoute() {
+  if (routeGroup) {
+    scene.remove(routeGroup);
+    routeGroup.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+    routeGroup = null;
+  }
+  const r = walk.route;
+  if (r && r.pts.length >= 2) {
+    const w = (routeWidth = routeWidthFor(controls.dist));
+    routeGroup = new THREE.Group();
+    const add = (pts, width, color, opacity, depthTest, order) => {
+      const m = new THREE.Mesh(ribbon(pts, width, T, 0.9), new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity, depthWrite: false, depthTest, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -40,
+      }));
+      m.renderOrder = order;
+      routeGroup.add(m);
+    };
+    add(r.pts, w * 1.75, '#ffffff', 0.95, true, 46);
+    add(r.pts, w, '#2f7bff', 1, true, 47);
+    add(r.pts, w, '#2f7bff', 0.3, false, 48); // faint where buildings or trees hide it
+    const legs = [[[walk.start.x, walk.start.y, T.height(walk.start.x, walk.start.y)], r.pts[0]], [r.pts[r.pts.length - 1], [r.end[0], r.end[1], T.height(r.end[0], r.end[1])]]];
+    for (const leg of legs) if (Math.hypot(leg[1][0] - leg[0][0], leg[1][1] - leg[0][1]) > 2) add(leg, w * 0.75, '#a8c8ff', 0.95, true, 47);
+    scene.add(routeGroup);
+  }
+  const end = $('#pinEnd');
+  end.hidden = !r;
+  if (r) $('#pinEndTime').textContent = `🚶 ${fmtDur(r.time)}`;
+  placePins();
+  needsRender = true;
+}
+const _pv = new THREE.Vector3();
+function placePin(el, x, y) {
+  _pv.set(x, T.height(x, y) - DATUM + 1.2, -y).project(camera);
+  const vis = _pv.z < 1 && Math.abs(_pv.x) < 1.2 && Math.abs(_pv.y) < 1.2;
+  el.style.visibility = vis ? '' : 'hidden';
+  if (vis) el.style.transform = `translate3d(${(((_pv.x + 1) / 2) * W).toFixed(1)}px,${(((1 - _pv.y) / 2) * H).toFixed(1)}px,0)`;
+}
+function placePins() {
+  if (!camera) return;
+  if (walk.start) placePin($('#pinStart'), walk.start.x, walk.start.y);
+  if (walk.route) placePin($('#pinEnd'), walk.route.end[0], walk.route.end[1]);
+}
+function walkBlock() {
+  const r = walk.route;
+  if (!r) return '';
+  const s = S();
+  const notes = [];
+  if (r.flags & STEPS) notes.push(s.walkSteps);
+  if (r.flags & INDOOR) notes.push(s.walkIndoor);
+  const climb = r.up >= 2 || r.down >= 2 ? ` · ↑${Math.round(r.up)} m ↓${Math.round(r.down)} m` : '';
+  return `<div class="walk-block">
+    <div class="wk-main"><span class="wk-ico" aria-hidden="true">🚶</span><b>${esc(fmtDur(r.time))}</b><span class="wk-dist">${esc(fmtDist(r.dist))}</span></div>
+    <div class="wk-sub">${esc(fmt(s.walkFromName, { s: nameText(walk.start.name) }))}${climb}${notes.length ? ' · ' + esc(notes.join(' · ')) : ''}</div>
+    <button class="btn small wk-here" type="button">${esc(s.walkFromHere)}</button>
+  </div>`;
+}
+// make the current destination the new start
+function walkFromHere() {
+  const sel = state.sel;
+  if (!sel || !walk.dest) return;
+  const name = sel.kind === 'point' ? { key: 'walkPinned' } : recName(sel.kind === 'campus' ? recsOf(sel.info)[0] : sel.rec);
+  const dest = walk.dest;
+  select(null);
+  setStart(dest, name);
+}
+function renderWalkbar() {
+  const s = S();
+  $('#wbFrom').textContent = walk.start ? fmt(s.walkFrom, { s: nameText(walk.start.name) }) : '';
+  const hint = $('#wbHint');
+  if (!hint.classList.contains('msg')) hint.textContent = walk.pick ? s.walkPickHint : s.walkHint;
+  const pick = $('#wbPick');
+  pick.textContent = walk.pick ? s.walkCancel : s.walkSetStart;
+  pick.setAttribute('aria-pressed', String(walk.pick));
+  document.body.classList.toggle('picking-start', walk.pick);
+  const isoBtn = $('#wbIso');
+  $('#wbIsoLong').textContent = s.walkIso;
+  isoBtn.title = s.walkIso;
+  isoBtn.setAttribute('aria-pressed', String(walk.iso));
+  $('#wbLegend').hidden = !walk.iso;
+  $('#wbLegendLabel').textContent = s.walkIsoLegend;
+  const loc = $('#wbLoc');
+  loc.title = s.walkLoc;
+  loc.setAttribute('aria-label', s.walkLoc);
+  $('#pinStart').title = s.walkDrag;
+}
+function walkMessage(text) {
+  const hint = $('#wbHint');
+  hint.textContent = text;
+  hint.classList.add('msg');
+  clearTimeout(walkMessage.timer);
+  walkMessage.timer = setTimeout(() => { hint.classList.remove('msg'); renderWalkbar(); }, 5000);
+}
+// latitude / longitude to the model's local metres (same tangent plane as tools/process.mjs)
+function toLocal(lat, lon) {
+  const [lat0, lon0] = data.origin, phi = (lat0 * Math.PI) / 180;
+  const mLat = 111132.954 - 559.822 * Math.cos(2 * phi) + 1.175 * Math.cos(4 * phi);
+  const mLon = 111412.84 * Math.cos(phi) - 93.5 * Math.cos(3 * phi);
+  return [(lon - lon0) * mLon, (lat - lat0) * mLat];
+}
+function locate() {
+  if (!navigator.geolocation) { walkMessage(S().walkLocErr); return; }
+  walkMessage(S().walkLocBusy);
+  navigator.geolocation.getCurrentPosition((pos) => {
+    const [x, y] = toLocal(pos.coords.latitude, pos.coords.longitude);
+    const [X0, Y0, X1, Y1] = data.bounds;
+    if (x < X0 || x > X1 || y < Y0 || y > Y1) {
+      walkMessage(fmt(S().walkLocFar, { d: (Math.hypot(x, y) / 1000).toFixed(1) }));
+      return;
+    }
+    $('#wbHint').classList.remove('msg');
+    setStart({ x, y }, { key: 'walkMyLoc' });
+    controls.flyTo({ target: new THREE.Vector3(x, T.height(x, y) - DATUM, -y), dist: Math.min(controls.dist, 700) });
+  }, () => walkMessage(S().walkLocErr), { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
+}
+function setupWalk() {
+  setStart({ x: data.walkStart.x, y: data.walkStart.y }, { en: data.walkStart.en, zh: data.walkStart.zh });
+  $('#wbPick').addEventListener('click', () => { walk.pick = !walk.pick; renderWalkbar(); });
+  $('#wbLoc').addEventListener('click', locate);
+  $('#wbIso').addEventListener('click', () => {
+    walk.iso = !walk.iso;
+    iso.mesh.visible = walk.iso;
+    if (walk.iso) iso.color(walk.tree);
+    renderWalkbar();
+    needsRender = true;
+  });
+  $('#wbLegendBar').style.background = `linear-gradient(90deg, ${ISO_RAMP.join(',')})`;
+  // drag the start pin anywhere; dropping it on a building starts from that building
+  const pin = $('#pinStart');
+  let drag = null;
+  pin.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    pin.setPointerCapture(e.pointerId);
+    drag = { x: e.clientX, y: e.clientY, queued: false };
+    pin.classList.add('dragging');
+  });
+  pin.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    drag.x = e.clientX; drag.y = e.clientY;
+    if (drag.queued) return;
+    drag.queued = true;
+    requestAnimationFrame(() => {
+      if (!drag) return;
+      drag.queued = false;
+      const hit = pickAt(drag.x, drag.y);
+      if (hit) setStart({ x: hit.point.x, y: -hit.point.z }, { key: 'walkPinned' });
+    });
+  });
+  const end = (e) => {
+    if (!drag) return;
+    const hit = pickAt(e.clientX, e.clientY);
+    drag = null;
+    pin.classList.remove('dragging');
+    if (hit && hit.rec) setStart({ outer: mainRec(hit.rec).outer }, recName(hit.rec));
+  };
+  pin.addEventListener('pointerup', end);
+  pin.addEventListener('pointercancel', end);
+  pin.addEventListener('wheel', (e) => controls._wheel(e), { passive: false });
+  $('#pinEnd').addEventListener('wheel', (e) => controls._wheel(e), { passive: false });
+}
 
 // ---------------------------------------------------------------- colour views and legend
 const RAMP_H = ['#fde9a9', '#f8b45d', '#ea6f3c', '#c13b4a', '#7a2a6e'];
@@ -714,7 +994,9 @@ function setupUI() {
   addEventListener('keydown', (e) => {
     if (e.target.closest('input, textarea, select')) return;
     if (e.key === '/') { e.preventDefault(); $('#search').focus(); }
-    if (e.key === 'Escape') { if (state.tour) stopTour(true); else select(null); }
+    if (e.key === 'Escape') {
+      if (state.walk.pick) { state.walk.pick = false; renderWalkbar(); } else if (state.tour) stopTour(true); else select(null);
+    }
   });
   $('#hint').textContent = touch ? t('hintTouch') : t('hint');
   setTimeout(() => $('#hint').classList.add('fade'), 9000);
@@ -751,6 +1033,8 @@ function applyLang() {
     + `<li>OpenStreetMap: ${esc(data.osm.slice(0, 10))}</li>`;
   $('#hint').textContent = touch ? s.hintTouch : s.hint;
   $('#playBtn').textContent = state.playing ? s.pause : s.play;
+  renderWalkbar();
+  if (walk.route) $('#pinEndTime').textContent = `🚶 ${fmtDur(walk.route.time)}`;
   labels.setLang(state.lang);
   renderDirectory();
   renderCard();
@@ -825,6 +1109,9 @@ function frame(now) {
     scene.fog.far = controls.dist * 5 + 9000;
     if (state.layers.labels) labels.update(camera, controls.dist, W, H, kinds, blockers());
     $('#compass').style.transform = `rotate(${-controls.yaw}rad)`;
+    // keep the route a readable width at any zoom
+    if (walk.route && Math.abs(Math.log(routeWidthFor(controls.dist) / routeWidth)) > 0.3) drawRoute();
+    placePins();
     // the button names the view it switches to
     const tiltTo = controls.pitch > 1.3 ? '3D' : '2D';
     if (tiltBtn.textContent !== tiltTo) tiltBtn.textContent = tiltTo;
