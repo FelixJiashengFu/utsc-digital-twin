@@ -3,6 +3,7 @@ export const STR = {
   en: {
     pageTitle: 'UTSC Digital Twin — University of Toronto Scarborough in 3D',
     brand: 'UTSC Digital Twin',
+    canvasLabel: '3D model of the University of Toronto Scarborough campus. Drag to pan, right-drag to rotate, scroll to zoom.',
     brandSub: 'University of Toronto Scarborough · 3D campus, October 2026',
     langBtn: '中文', langLabel: '切换到中文',
     about: 'About',
@@ -56,6 +57,7 @@ export const STR = {
   zh: {
     pageTitle: 'UTSC 数字孪生——多伦多大学士嘉堡校区三维模型',
     brand: 'UTSC 数字孪生',
+    canvasLabel: '多伦多大学士嘉堡校区三维模型。拖动平移，右键拖动旋转，滚轮缩放。',
     brandSub: '多伦多大学士嘉堡校区 · 三维校园（2026 年 10 月）',
     langBtn: 'EN', langLabel: 'Switch to English',
     about: '关于',

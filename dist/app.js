@@ -4,7 +4,7 @@ import { DATUM, Terrain, buildTerrainMeshes, paintGround, buildRoads, buildWater
 import { TwinControls } from './controls.js?v=630d125d76';
 import { SkySystem, sunPosition, sunTimes } from './sky.js?v=5c293d7e91';
 import { LabelLayer } from './labels.js?v=be06b76a19';
-import { STR, fmt } from './i18n.js?v=1b7a83ef86';
+import { STR, fmt } from './i18n.js?v=ae50786392';
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -95,6 +95,7 @@ const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeou
 let data, T, B, trees, roads, water, lamps, outline, controls, sky, labels, renderer, scene, camera, terrainMat, groundTex;
 let needsRender = true;
 const canvas = $('#scene');
+const tiltBtn = $('#tiltBtn');
 
 async function main() {
   applyLang();
@@ -734,6 +735,7 @@ function applyLang() {
   const s = STR[state.lang];
   document.documentElement.lang = state.lang === 'zh' ? 'zh-CN' : 'en';
   document.title = s.pageTitle;
+  canvas.setAttribute('aria-label', s.canvasLabel);
   $$('[data-i18n]').forEach((el) => { el.textContent = s[el.dataset.i18n] ?? STR.en[el.dataset.i18n]; });
   $$('[data-i18n-title]').forEach((el) => { el.title = s[el.dataset.i18nTitle]; el.setAttribute('aria-label', s[el.dataset.i18nTitle]); });
   $$('[data-i18n-ph]').forEach((el) => { el.placeholder = s[el.dataset.i18nPh]; });
@@ -823,6 +825,9 @@ function frame(now) {
     scene.fog.far = controls.dist * 5 + 9000;
     if (state.layers.labels) labels.update(camera, controls.dist, W, H, kinds, blockers());
     $('#compass').style.transform = `rotate(${-controls.yaw}rad)`;
+    // the button names the view it switches to
+    const tiltTo = controls.pitch > 1.3 ? '3D' : '2D';
+    if (tiltBtn.textContent !== tiltTo) tiltBtn.textContent = tiltTo;
     renderer.render(scene, camera);
     if (window.twin) window.twin.frames++;
   }
