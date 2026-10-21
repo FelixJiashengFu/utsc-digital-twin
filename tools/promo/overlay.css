@@ -1,0 +1,41 @@
+/* Overlay for the promo recording (injected by tools/promo/record.mjs, never shipped with the site). */
+*, *::before, *::after { transition: none !important; animation: none !important; }
+body.pv-no-top .topbar, body.pv-no-dir #dir, body.pv-no-dock #dock, body.pv-no-ctl .mapctl, body.pv-no-walk #walkbar,
+body.pv-no-card #card, body.pv-no-pins #pins, body.pv-no-labels #labels, body.pv-no-legend #legend { display: none !important; }
+#hint, #tip, #tourBar { display: none !important; }
+.lbl.on { opacity: 1; }
+
+#promo { position: fixed; inset: 0; z-index: 300; pointer-events: none; color: #fff;
+  font-family: "Segoe UI", system-ui, "Microsoft YaHei", "PingFang SC", sans-serif; }
+#promo .pv-vignette { position: absolute; inset: 0;
+  background: radial-gradient(ellipse at 50% 45%, transparent 58%, rgba(3, 7, 16, 0.38) 100%),
+              linear-gradient(to top, rgba(4, 9, 20, 0.55), transparent 30%); }
+#promo .pv-title { position: absolute; left: 50%; top: 47%; transform: translate(-50%, -50%); text-align: center; white-space: nowrap; }
+#promo .pv-kicker { font-size: 22px; font-weight: 700; letter-spacing: 0.34em; text-transform: uppercase; opacity: 0.9; margin-bottom: 22px; }
+#promo .pv-title h1 { margin: 0; font-size: 112px; font-weight: 800; letter-spacing: -0.02em; line-height: 1;
+  text-shadow: 0 8px 48px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35); }
+#promo .pv-title p { margin: 22px 0 0; font-size: 40px; font-weight: 600; letter-spacing: 0.12em; text-shadow: 0 2px 16px rgba(0, 0, 0, 0.55); }
+#promo .pv-rule { width: 120px; height: 5px; border-radius: 3px; margin: 26px auto 0; background: linear-gradient(90deg, #6cb6ff, #f2c14e); }
+#promo .pv-cap { position: absolute; left: 96px; bottom: 96px; max-width: 1100px; padding-left: 26px; border-left: 6px solid #6cb6ff; }
+#promo .pv-cap.right { left: auto; right: 96px; text-align: right; padding-left: 0; padding-right: 26px; border-left: 0; border-right: 6px solid #6cb6ff; }
+#promo .pv-cap b { display: block; font-size: 56px; font-weight: 800; line-height: 1.1; text-shadow: 0 4px 24px rgba(0, 0, 0, 0.55); }
+#promo .pv-cap span { display: block; margin-top: 10px; font-size: 36px; font-weight: 600; opacity: 0.95; text-shadow: 0 3px 16px rgba(0, 0, 0, 0.6); }
+#promo .pv-lower { position: absolute; right: 96px; bottom: 96px; display: flex; align-items: center; gap: 22px; padding: 20px 28px;
+  border-radius: 20px; background: rgba(10, 16, 28, 0.74); border: 1px solid rgba(255, 255, 255, 0.14); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35); }
+#promo .pv-code { font: 800 38px/1 "Cascadia Mono", Consolas, monospace; padding: 12px 16px; border-radius: 14px; background: var(--c, #3d6fd6); }
+#promo .pv-lower b { display: block; font-size: 38px; font-weight: 800; line-height: 1.15; }
+#promo .pv-lower span { display: block; font-size: 26px; opacity: 0.88; margin-top: 4px; }
+#promo .pv-lower em { display: block; font-style: normal; font-size: 22px; color: #ffcf6e; margin-top: 8px; font-weight: 700; }
+#promo .pv-year { position: absolute; right: 96px; top: 80px; text-align: right; }
+#promo .pv-year b { display: block; font: 800 168px/1 "Cascadia Mono", Consolas, monospace; text-shadow: 0 8px 40px rgba(0, 0, 0, 0.5); }
+#promo .pv-year span { display: block; font-size: 30px; font-weight: 700; opacity: 0.9; margin-top: 4px; }
+#promo .pv-clock { position: absolute; right: 96px; top: 80px; font: 800 120px/1 "Cascadia Mono", Consolas, monospace; text-shadow: 0 8px 40px rgba(0, 0, 0, 0.55); }
+#promo .pv-cursor { position: absolute; left: 0; top: 0; width: 46px; height: 46px; filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.45)); }
+#promo .pv-ripple { position: absolute; left: 0; top: 0; width: 20px; height: 20px; margin: -10px 0 0 -10px; border-radius: 50%; border: 4px solid #fff; }
+#promo .pv-end { position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%); text-align: center; white-space: nowrap; }
+#promo .pv-end h1 { margin: 0; font-size: 104px; font-weight: 800; letter-spacing: -0.02em; text-shadow: 0 8px 48px rgba(0, 0, 0, 0.55); }
+#promo .pv-end p { margin: 18px 0 0; font-size: 38px; font-weight: 600; letter-spacing: 0.1em; text-shadow: 0 3px 18px rgba(0, 0, 0, 0.6); }
+#promo .pv-url { display: inline-block; margin-top: 40px; padding: 16px 30px; border-radius: 999px; font: 700 34px "Segoe UI", system-ui, sans-serif;
+  background: rgba(10, 16, 28, 0.72); border: 2px solid rgba(108, 182, 255, 0.8); }
+#promo .pv-tags { margin-top: 26px; font-size: 28px; font-weight: 600; opacity: 0.92; letter-spacing: 0.04em; text-shadow: 0 3px 14px rgba(0, 0, 0, 0.6); }
+#promo .pv-black { position: absolute; inset: 0; background: #000; opacity: 0; }

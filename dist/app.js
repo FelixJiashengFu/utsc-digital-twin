@@ -5,7 +5,7 @@ import { TwinControls } from './controls.js?v=630d125d76';
 import { SkySystem, sunPosition, sunTimes } from './sky.js?v=5c293d7e91';
 import { LabelLayer } from './labels.js?v=be06b76a19';
 import { STR, fmt } from './i18n.js?v=5b0a415bcd';
-import { WalkNet, walkSeconds, ribbon, buildIsoMesh, ISO_RAMP, STEPS, INDOOR } from './walk.js?v=b083093b7d';
+import { WalkNet, walkSeconds, ribbon, buildIsoMesh, ISO_RAMP, STEPS, INDOOR } from './walk.js?v=645465a637';
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -176,7 +176,7 @@ async function main() {
   controls.flyTo(homeView(), 2.4);
   requestAnimationFrame(frame);
   // handle for debugging from the console and for the automated browser checks in tools/qa.mjs
-  window.twin = { state, controls, data, B, T, camera, renderer, select, setYear, applyMode, castRay, net, setStart, walkTo, frames: 0 };
+  window.twin = { state, controls, data, B, T, camera, renderer, scene, select, setYear, applyMode, castRay, net, setStart, walkTo, frames: 0 };
   loadEl.classList.add('done');
   setTimeout(() => loadEl.remove(), 900);
   if (location.hash.length > 1) selectByCode(decodeURIComponent(location.hash.slice(1)), true);
@@ -1111,6 +1111,7 @@ function frame(now) {
     $('#compass').style.transform = `rotate(${-controls.yaw}rad)`;
     // keep the route a readable width at any zoom
     if (walk.route && Math.abs(Math.log(routeWidthFor(controls.dist) / routeWidth)) > 0.3) drawRoute();
+    if (walk.iso) iso.setWidth(controls.dist);
     placePins();
     // the button names the view it switches to
     const tiltTo = controls.pitch > 1.3 ? '3D' : '2D';

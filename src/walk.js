@@ -298,7 +298,7 @@ export function buildIsoMesh(net, T) {
   net.edges.forEach((e, k) => {
     const pts = [];
     for (let i = 0; i < e.m; i++) pts.push([e.xs[i], e.ys[i], e.zs[i]]);
-    const g = ribbon(pts, 3.2, T, 0.5);
+    const g = ribbon(pts, 3.2, T, 1.2);
     const p = g.attributes.position.array;
     for (let i = 0; i < p.length; i++) pos.push(p[i]);
     for (const j of g.index.array) idx.push(base + j);
@@ -311,14 +311,36 @@ export function buildIsoMesh(net, T) {
     base += p.length / 3;
     g.dispose();
   });
+  // keep each ribbon's centre line and lateral direction; the shader sets the width from the zoom,
+  // so the map stays readable from far away without rebuilding anything while zooming
+  const centre = new Float32Array(pos.length), sideDir = new Float32Array(pos.length);
+  for (let v = 0; v < pos.length; v += 6) {
+    const dx = pos[v] - pos[v + 3], dz = pos[v + 2] - pos[v + 5], l = Math.hypot(dx, dz) || 1;
+    for (let c = 0; c < 3; c++) { const m = (pos[v + c] + pos[v + 3 + c]) / 2; centre[v + c] = m; centre[v + 3 + c] = m; }
+    sideDir[v] = dx / l; sideDir[v + 2] = dz / l;
+    sideDir[v + 3] = -dx / l; sideDir[v + 5] = -dz / l;
+  }
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('position', new THREE.BufferAttribute(centre, 3));
+  geo.setAttribute('aSide', new THREE.BufferAttribute(sideDir, 3));
   geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(pos.length), 3));
   geo.setIndex(base > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));
+  geo.computeBoundingSphere();
+  geo.boundingSphere.radius += 20;
+  const uHalf = { value: 2 };
   const mat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.92, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -20 });
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uHalf = uHalf;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec3 aSide;\nuniform float uHalf;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed += aSide * uHalf;');
+  };
+  mat.customProgramCacheKey = () => 'twin-iso-v1';
   const mesh = new THREE.Mesh(geo, mat);
   mesh.renderOrder = 18;
   mesh.visible = false;
+  // half-width in metres for a camera `dist` metres away: about 3 px on screen, never under 1.6 m
+  function setWidth(dist) { uHalf.value = Math.min(12, Math.max(1.6, dist * 0.0028)); }
   const c = new THREE.Color();
   function color(tr) {
     const arr = geo.attributes.color.array;
@@ -329,5 +351,5 @@ export function buildIsoMesh(net, T) {
     }
     geo.attributes.color.needsUpdate = true;
   }
-  return { mesh, color };
+  return { mesh, color, setWidth };
 }

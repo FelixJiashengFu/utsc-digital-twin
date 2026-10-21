@@ -4,3 +4,5 @@ node_modules/
 data/raw/
 # screenshots and report from tools/qa.mjs and tools/views.mjs
 qa/
+# rendered promo video, frames and soundtrack (recreate with tools/promo/)
+/promo/
